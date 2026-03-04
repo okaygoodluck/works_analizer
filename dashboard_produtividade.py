@@ -5,6 +5,7 @@ import glob
 import re
 import altair as alt
 from ui_components import apply_modern_style, metric_card
+from data_loader import load_files_in_parallel
 
 # Configuração da página
 st.set_page_config(
@@ -46,50 +47,49 @@ def get_available_dates():
             
     return date_map
 
-@st.cache_data
-def load_file_data(file_path):
-    """Carrega um arquivo específico e calcula o peso ajustado."""
-    cols = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
-    try:
-        df = pd.read_excel(file_path, usecols=lambda c: c in cols)
+def calcular_peso_row(row):
+    peso = row["Peso"]
+    clientes = row["Clientes"] if pd.notna(row["Clientes"]) else 0
+    ple = row["PLE"]
+    recursos = str(row["Recursos"]).upper() if pd.notna(row["Recursos"]) else ""
+    
+    # Regra 1: Se for PLE e tiver MANOBRA INFORMATIVA -> Peso 1
+    if ple == "PLE" and "MANOBRA INFORMATIVA" in recursos:
+        return 1
+    
+    # Regra 2: Se peso vazio e em PLE estiver PLE -> Peso 'PLE'
+    if pd.isna(peso) and ple == "PLE":
+        return "PLE"
         
-        # Garantir colunas necessárias se não existirem
-        for col in cols:
-            if col not in df.columns:
-                df[col] = None
+    # Regra 3: Se peso for 1 mas clientes for 0 -> Peso 3
+    if peso == 1 and clientes == 0:
+        return 3
+        
+    return peso
 
-        # Converter Solicitação para string
-        df["Solicitação"] = df["Solicitação"].astype(str)
-        
-        # --- Lógica de Cálculo de Peso ---
-        def calcular_peso(row):
-            peso = row["Peso"]
-            clientes = row["Clientes"] if pd.notna(row["Clientes"]) else 0
-            ple = row["PLE"]
-            recursos = str(row["Recursos"]).upper() if pd.notna(row["Recursos"]) else ""
-            
-            # Regra 1: Se for PLE e tiver MANOBRA INFORMATIVA -> Peso 1
-            if ple == "PLE" and "MANOBRA INFORMATIVA" in recursos:
-                return 1
-            
-            # Regra 2: Se peso vazio e em PLE estiver PLE -> Peso 'PLE' (vamos usar um valor numérico simbólico ou tratar separado? O usuário pediu "quantificar o peso com PLE")
-            # Assumindo que o usuário quer contar como uma categoria. Para somar, precisamos de números.
-            # Vamos retornar uma string para categoria ou número. O usuário pediu "quantidade por peso".
-            if pd.isna(peso) and ple == "PLE":
-                return "PLE"
-                
-            # Regra 3: Se peso for 1 mas clientes for 0 -> Peso 3
-            if peso == 1 and clientes == 0:
-                return 3
-                
-            return peso
-
-        df["Peso Calculado"] = df.apply(calcular_peso, axis=1)
-        
+def process_weight_logic(df):
+    """Aplica a lógica de cálculo de peso e formatação de colunas."""
+    if df.empty:
         return df
-    except Exception as e:
-        st.error(f"Erro ao ler arquivo {os.path.basename(file_path)}: {e}")
-        return pd.DataFrame()
+        
+    # Garantir colunas necessárias
+    cols = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
+    for col in cols:
+        if col not in df.columns:
+            df[col] = None
+
+    # Converter Solicitação para string
+    if "Solicitação" in df.columns:
+        df["Solicitação"] = df["Solicitação"].astype(str)
+    
+    df["Peso Calculado"] = df.apply(calcular_peso_row, axis=1)
+    return df
+
+@st.cache_data
+def load_data_parallel_cached(file_list):
+    """Carrega arquivos em paralelo com cache do Streamlit."""
+    cols_needed = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
+    return load_files_in_parallel(file_list, usecols=cols_needed)
 
 def process_transitions(df_start, df_end):
     """Compara dois dataframes e identifica transições."""
@@ -101,8 +101,7 @@ def process_transitions(df_start, df_end):
         columns={"Status Solicitação": "Status Final", "Peso Calculado": "Peso Final"}
     )
     
-    # Merge (Inner join para pegar apenas o que existe nos dois, ou Left se quisermos ver o que sumiu?)
-    # O objetivo é "o que foi feito", então precisamos ver a evolução das solicitações que existiam.
+    # Merge (Inner join para pegar apenas o que existe nos dois)
     merged = pd.merge(df_s, df_e, on="Solicitação", how="inner")
     
     return merged
@@ -140,12 +139,32 @@ if date_start > date_end:
 file_start = date_map[date_start]
 file_end = date_map[date_end]
 
-with st.spinner("Carregando e processando arquivos..."):
-    df_start = load_file_data(file_start)
-    df_end = load_file_data(file_end)
+with st.spinner("Carregando e processando arquivos em paralelo..."):
+    # Preparar lista para carga paralela
+    file_list = [
+        {"path": file_start, "type": "start"},
+        {"path": file_end, "type": "end"}
+    ]
+    cols_needed = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
+    
+    # Carregar ambos de uma vez
+    df_all = load_files_in_parallel(file_list, usecols=cols_needed)
+    
+    if df_all.empty:
+        st.error("Falha ao carregar dados.")
+        st.stop()
+        
+    # Separar os dataframes
+    # O data_loader injeta metadados, então podemos filtrar por 'path' ou 'type'
+    df_start_raw = df_all[df_all["type"] == "start"].copy()
+    df_end_raw = df_all[df_all["type"] == "end"].copy()
+    
+    # Processar lógica de peso individualmente
+    df_start = process_weight_logic(df_start_raw)
+    df_end = process_weight_logic(df_end_raw)
     
     if df_start.empty or df_end.empty:
-        st.error("Falha ao carregar dados.")
+        st.error("Falha ao processar dados de um dos arquivos.")
         st.stop()
         
     df_transitions = process_transitions(df_start, df_end)
@@ -211,81 +230,66 @@ metric_card("Total de Movimentações (Status de Interesse)", total_movimentacoe
 # --- Análise Unificada (Região e Peso) ---
 st.subheader("📊 Análise de Produtividade")
 
-# Layout: Seletor (Esq - 1 parte) | Gráfico Região (Centro - 2 partes) | Gráfico Peso (Dir - 2 partes)
-col_select, col_graph_reg, col_graph_weight = st.columns([1, 2, 2])
+# Layout: Gráfico Região (Esq) | Gráfico Peso (Dir)
+# Removida coluna dedicada ao seletor para ganhar espaço
+# O seletor agora é um multiselect no topo
 
 # Preparação dos dados
 grouped_region = df_filtered.groupby(["Região", "Categoria Transição"]).size().reset_index(name="Quantidade")
 df_filtered["Peso Label"] = df_filtered["Peso Final"].apply(normalize_peso)
 grouped_weight = df_filtered.groupby(["Região", "Peso Label", "Categoria Transição"]).size().reset_index(name="Quantidade")
 
-# 1. Seletor Único de Região
-with col_select:
-    st.markdown("#### Selecione Regiões")
-    avail_regions = sorted(grouped_region["Região"].unique())
-    df_selector = pd.DataFrame({"Região": avail_regions})
-    
-    # Seleção Padrão (Top 5)
-    default_indices = list(range(min(5, len(avail_regions))))
-    
-    event = st.dataframe(
-        df_selector,
-        use_container_width=True,
-        hide_index=True,
-        height=350,
-        on_select="rerun",
-        selection_mode="multi-row",
-        key="region_selection_unified"
-    )
-    
-    try:
-        selected_indices = event.selection.rows
-    except AttributeError:
-        selected_indices = []
+# 1. Seletor de Regiões (Estilo Multiselect)
+avail_regions = sorted(grouped_region["Região"].unique())
+default_regions = avail_regions[:5] if len(avail_regions) >= 5 else avail_regions
 
-    if not selected_indices:
-        selected_regions = [avail_regions[i] for i in default_indices]
-        st.caption("Mostrando top 5 padrão.")
-    else:
-        selected_regions = df_selector.iloc[selected_indices]["Região"].tolist()
+selected_regions = st.multiselect(
+    "Filtrar Regiões para os Gráficos:",
+    options=avail_regions,
+    default=default_regions,
+    key="chart_region_filter"
+)
 
-# 2. Gráfico Transições por Região
+# 2. Gráficos Lado a Lado
+col_graph_reg, col_graph_weight = st.columns(2)
+
 with col_graph_reg:
     st.markdown("##### Por Região")
     if selected_regions:
         grouped_region_filtered = grouped_region[grouped_region["Região"].isin(selected_regions)]
         
-        chart_region = alt.Chart(grouped_region_filtered).mark_bar().encode(
-            x=alt.X("Categoria Transição", axis=None), 
-            y=alt.Y("Quantidade", title="Qtd Solicitações"),
-            color=alt.Color("Categoria Transição", 
-                            title="Status Final",
+        # Gráfico compacto sem faceting para economizar espaço
+        chart_region = alt.Chart(grouped_region_filtered).mark_bar(size=25).encode(
+            x=alt.X("Região:N", title="Região", axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Quantidade:Q", title="Qtd"),
+            color=alt.Color("Categoria Transição:N", 
+                            title="Status",
                             scale=alt.Scale(domain=["Clicadas", "Enviadas", "Reprovadas"], range=["#1f77b4", "#2ca02c", "#d62728"])),
-            column=alt.Column("Região", header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
             tooltip=["Região", "Categoria Transição", "Quantidade"]
-        ).properties(width=60) 
+        ).properties(height=300)
         
-        st.altair_chart(chart_region)
+        st.altair_chart(chart_region, use_container_width=True)
     else:
         st.info("Selecione regiões.")
 
-# 3. Gráfico Análise por Peso
 with col_graph_weight:
     st.markdown("##### Por Peso")
     if selected_regions:
         grouped_weight_filtered = grouped_weight[grouped_weight["Região"].isin(selected_regions)]
 
-        chart_weight = alt.Chart(grouped_weight_filtered).mark_bar().encode(
-            x=alt.X("Peso Label:N", title="Peso"),
-            y=alt.Y("Quantidade:Q", title=""), # Sem título Y para limpar visual
-            color=alt.Color("Categoria Transição:N", 
-                            title="Status Final",
-                            scale=alt.Scale(domain=["Clicadas", "Enviadas", "Reprovadas"], range=["#1f77b4", "#2ca02c", "#d62728"])),
-            column=alt.Column("Região:N", header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
-            tooltip=["Região", "Peso Label", "Categoria Transição", "Quantidade"]
-        ).properties(width=80) 
+        # Gráfico de peso compacto (Agrupado por Peso, empilhado por Status)
+        # Removemos o faceting por região aqui para caber na coluna lateral
+        # Se quiser ver por região, o usuário usa o filtro
+        grouped_weight_agg = grouped_weight_filtered.groupby(["Peso Label", "Categoria Transição"]).sum().reset_index()
 
-        st.altair_chart(chart_weight)
+        chart_weight = alt.Chart(grouped_weight_agg).mark_bar(size=25).encode(
+            x=alt.X("Peso Label:N", title="Peso"),
+            y=alt.Y("Quantidade:Q", title=""),
+            color=alt.Color("Categoria Transição:N", title="Status"),
+            tooltip=["Peso Label", "Categoria Transição", "Quantidade"]
+        ).properties(height=300)
+
+        st.altair_chart(chart_weight, use_container_width=True)
     else:
         st.info("Selecione regiões.")
 

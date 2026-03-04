@@ -6,6 +6,7 @@ import re
 import altair as alt
 import numpy as np
 from ui_components import apply_modern_style, metric_card
+from data_loader import load_files_in_parallel
 
 # Configuração da página
 st.set_page_config(
@@ -27,28 +28,13 @@ def load_all_history():
     Retorna um DataFrame contendo: Solicitação, Status, Data Arquivo, Região.
     """
     all_files = glob.glob(os.path.join(BASE_PATH, "*.xlsx"))
-    data_list = []
     
-    # Elementos de UI para feedback
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    total_files = len(all_files)
+    file_list = []
     
-    # Colunas essenciais
-    cols_needed = ["Solicitação", "Status Solicitação", "Região", "Executor", "Data de início"]
-    
-    # Status de interesse para o ciclo
-    relevant_statuses = [
-        "APROVADA", 
-        "EM ELABORACAO", 
-        "ELABORADA", 
-        "ENVIADA PARA O CONDIS"
-    ]
-    
-    for i, file_path in enumerate(all_files):
+    for file_path in all_files:
         filename = os.path.basename(file_path)
         
-        # Extrair data do arquivo (mesma lógica do dashboard anterior)
+        # Extrair data do arquivo
         file_date = None
         match1 = re.search(r"(\d{2})(\d{2})(\d{4})", filename)
         match2 = re.search(r"(\d{2})_(\d{2})_(\d{2})", filename)
@@ -59,44 +45,48 @@ def load_all_history():
             file_date = pd.to_datetime(f"20{match2.group(3)}-{match2.group(2)}-{match2.group(1)}")
             
         if file_date:
-            try:
-                # Carregar arquivo
-                df = pd.read_excel(file_path, usecols=lambda c: c in cols_needed)
-                
-                # Filtrar apenas status relevantes para reduzir memória
-                if "Status Solicitação" in df.columns:
-                    df = df[df["Status Solicitação"].isin(relevant_statuses)].copy()
-                
-                if not df.empty:
-                    df["Data Arquivo"] = file_date
-                    df["Nome Arquivo"] = filename
-                    data_list.append(df)
-            except Exception as e:
-                # Ignorar arquivos corrompidos ou fora do padrão
-                pass
-        
-        # Atualizar barra de progresso
-        if i % 5 == 0:
-            progress = (i + 1) / total_files
-            progress_bar.progress(progress)
-            status_text.text(f"Lendo histórico: {i+1}/{total_files} arquivos...")
-            
-    progress_bar.empty()
-    status_text.empty()
+            file_list.append({
+                "path": file_path, 
+                "Data Arquivo": file_date, 
+                "Nome Arquivo": filename
+            })
+
+    # Colunas essenciais
+    cols_needed = ["Solicitação", "Status Solicitação", "Região", "Executor", "Data de início"]
     
-    if not data_list:
+    # Carregamento paralelo
+    full_df = load_files_in_parallel(file_list, usecols=cols_needed)
+    
+    if full_df.empty:
         return pd.DataFrame()
         
-    # Concatenar tudo
-    full_df = pd.concat(data_list, ignore_index=True)
+    # Status de interesse para o ciclo
+    relevant_statuses = [
+        "APROVADA", 
+        "EM ELABORACAO", 
+        "ELABORADA", 
+        "ENVIADA PARA O CONDIS"
+    ]
+    
+    # Filtrar apenas status relevantes para reduzir memória
+    if "Status Solicitação" in full_df.columns:
+        full_df = full_df[full_df["Status Solicitação"].isin(relevant_statuses)].copy()
+    
+    if full_df.empty:
+        return pd.DataFrame()
     
     # Garantir tipos
-    full_df["Solicitação"] = full_df["Solicitação"].astype(str)
-    full_df["Data Arquivo"] = pd.to_datetime(full_df["Data Arquivo"])
+    if "Solicitação" in full_df.columns:
+        full_df["Solicitação"] = full_df["Solicitação"].astype(str)
+    
+    if "Data Arquivo" in full_df.columns:
+        full_df["Data Arquivo"] = pd.to_datetime(full_df["Data Arquivo"])
+        
     if "Data de início" in full_df.columns:
         full_df["Data de início"] = pd.to_datetime(full_df["Data de início"], errors='coerce')
     
     return full_df
+
 
 def calculate_cycle_time(df_history):
     """

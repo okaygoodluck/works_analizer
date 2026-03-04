@@ -7,6 +7,7 @@ import numpy as np
 import altair as alt
 from datetime import datetime
 from ui_components import apply_modern_style, metric_card
+from data_loader import load_files_in_parallel
 
 # Configuração da página
 st.set_page_config(
@@ -23,15 +24,10 @@ BASE_PATH = r"i:\IT\ODCO\PUBLICA\Kennedy\Projetos\works_analyzer\mesao"
 @st.cache_data
 def load_data():
     all_files = glob.glob(os.path.join(BASE_PATH, "*.xlsx"))
-    data_list = []
     
-    # Barra de progresso
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    file_list = []
     
-    total_files = len(all_files)
-    
-    for i, file_path in enumerate(all_files):
+    for file_path in all_files:
         filename = os.path.basename(file_path)
         
         # Extrair data do arquivo
@@ -45,33 +41,27 @@ def load_data():
             file_date = pd.to_datetime(f"20{match2.group(3)}-{match2.group(2)}-{match2.group(1)}")
             
         if file_date:
-            try:
-                # Ler apenas colunas necessárias para otimizar
-                df = pd.read_excel(file_path, usecols=["Status Solicitação", "Data de início", "Solicitação", "Executor", "Região"])
-                
-                # Filtrar apenas APROVADA
-                df = df[df["Status Solicitação"] == "APROVADA"].copy()
-                
-                if not df.empty:
-                    df["Data Arquivo"] = file_date
-                    df["Nome Arquivo"] = filename
-                    data_list.append(df)
-            except Exception as e:
-                pass
-        
-        # Atualizar progresso a cada 10 arquivos
-        if i % 10 == 0:
-            progress = (i + 1) / total_files
-            progress_bar.progress(progress)
-            status_text.text(f"Processando arquivo {i+1}/{total_files}...")
-            
-    progress_bar.empty()
-    status_text.empty()
+            file_list.append({
+                "path": file_path,
+                "Data Arquivo": file_date,
+                "Nome Arquivo": filename
+            })
     
-    if not data_list:
+    if not file_list:
         return pd.DataFrame()
-        
-    final_df = pd.concat(data_list, ignore_index=True)
+
+    # Colunas necessárias
+    cols = ["Status Solicitação", "Data de início", "Solicitação", "Executor", "Região"]
+    
+    # Carregamento paralelo
+    final_df = load_files_in_parallel(file_list, usecols=cols)
+    
+    if final_df.empty:
+        return pd.DataFrame()
+
+    # Filtrar apenas APROVADA
+    if "Status Solicitação" in final_df.columns:
+        final_df = final_df[final_df["Status Solicitação"] == "APROVADA"].copy()
     
     # Processamento de datas e cálculo de dias úteis
     final_df["Data de início"] = pd.to_datetime(final_df["Data de início"])
@@ -245,7 +235,7 @@ else:
     st.divider()
     
     # Gráficos em layout vertical (um abaixo do outro)
-    st.markdown("### 🔴 Atrasos (Fora do Prazo)")
+    st.markdown("### 🔴 Atrasos")
     df_atrasos = df_day[df_day["Status Prazo"] == "FORA DO PRAZO"]
     if not df_atrasos.empty:
         # Métricas de Motivo
@@ -255,9 +245,9 @@ else:
         
         c1, c2 = st.columns(2)
         with c1:
-            metric_card("Não Atendidas", nao_atendidas, suffix=" (Recorrência)")
+            metric_card("Não Atendidas", nao_atendidas)
         with c2:
-            metric_card("Envio Tardio", envio_tardio, suffix=" (Novas)")
+            metric_card("Envio Tardio", envio_tardio)
         
         st.markdown("#### Detalhamento por Região")
 

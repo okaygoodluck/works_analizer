@@ -5,6 +5,7 @@ import glob
 import re
 import altair as alt
 from ui_components import apply_modern_style, metric_card
+from data_loader import load_files_in_parallel
 
 # Configuração da página
 st.set_page_config(page_title="Histórico de Demandas APROVADAS", layout="wide")
@@ -44,10 +45,9 @@ def calcular_peso_ajustado(row):
 @st.cache_data
 def load_historical_data():
     all_files = glob.glob(os.path.join(BASE_PATH, "*.xlsx"))
-    all_data = []
     
-    # Lista de arquivos ordenados por data para processamento sequencial
-    file_map = []
+    # Lista de arquivos com metadados para carga paralela
+    file_list = []
     
     for file_path in all_files:
         filename = os.path.basename(file_path)
@@ -61,85 +61,68 @@ def load_historical_data():
             file_date = pd.to_datetime(f"20{match2.group(3)}-{match2.group(2)}-{match2.group(1)}").date()
             
         if file_date:
-            file_map.append({"date": file_date, "path": file_path})
+            file_list.append({"date": file_date, "path": file_path, "Data Referência": file_date})
             
-    # Ordenar por data
-    file_map.sort(key=lambda x: x["date"])
+    # Ordenar por data (importante para drop_duplicates manter o primeiro)
+    file_list.sort(key=lambda x: x["date"])
     
-    seen_solicitacoes_aprovadas = set()
-    seen_solicitacoes_cadastradas = set()
+    # Colunas necessárias
+    cols_needed = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
     
-    for item in file_map:
-        file_date = item["date"]
-        file_path = item["path"]
-        
-        try:
-            # Ler colunas necessárias
-            cols_needed = ["Solicitação", "Status Solicitação", "Região", "Peso", "Clientes", "PLE", "Recursos"]
-            
-            # Verificar colunas antes de ler para evitar erro
-            xl = pd.ExcelFile(file_path)
-            sheet_name = xl.sheet_names[0]
-            df_cols = pd.read_excel(file_path, sheet_name=sheet_name, nrows=0).columns.tolist()
-            use_cols = [c for c in cols_needed if c in df_cols]
-            
-            if "Solicitação" not in use_cols:
-                continue
-                
-            df = pd.read_excel(file_path, usecols=use_cols)
-            df["Solicitação"] = df["Solicitação"].astype(str)
-            
-            # --- 1. Processar Cadastradas (Primeira aparição no sistema) ---
-            current_ids = set(df["Solicitação"].unique())
-            new_cadastros = current_ids - seen_solicitacoes_cadastradas
-            seen_solicitacoes_cadastradas.update(new_cadastros)
-            
-            df_new_cad = df[df["Solicitação"].isin(new_cadastros)].copy()
-            
-            if not df_new_cad.empty:
-                df_new_cad["Data Referência"] = file_date
-                df_new_cad["Tipo Evento"] = "Cadastro"
-                # Aplicar regra de peso
-                df_new_cad["Peso Calculado"] = df_new_cad.apply(calcular_peso_ajustado, axis=1)
-                df_new_cad["Peso Label"] = df_new_cad["Peso Calculado"].apply(normalize_peso)
-                
-                cols_final = ["Solicitação", "Região", "Peso Label", "Data Referência", "Tipo Evento"]
-                # Garantir que colunas existem
-                for c in cols_final:
-                    if c not in df_new_cad.columns:
-                        df_new_cad[c] = None
-                        
-                all_data.append(df_new_cad[cols_final])
+    # Carregamento paralelo
+    df_all = load_files_in_parallel(file_list, usecols=cols_needed)
+    
+    if df_all.empty:
+        return pd.DataFrame()
 
-            # --- 2. Processar Aprovadas (Primeira vez como APROVADA) ---
-            if "Status Solicitação" in df.columns:
-                df_aprov = df[df["Status Solicitação"] == "APROVADA"].copy()
-                
-                if not df_aprov.empty:
-                    current_aprov_ids = set(df_aprov["Solicitação"].unique())
-                    new_aprov = current_aprov_ids - seen_solicitacoes_aprovadas
-                    seen_solicitacoes_aprovadas.update(new_aprov)
-                    
-                    df_new_aprov = df_aprov[df_aprov["Solicitação"].isin(new_aprov)].copy()
-                    
-                    if not df_new_aprov.empty:
-                        df_new_aprov["Data Referência"] = file_date
-                        df_new_aprov["Tipo Evento"] = "Aprovação"
-                        # Aplicar regra de peso
-                        df_new_aprov["Peso Calculado"] = df_new_aprov.apply(calcular_peso_ajustado, axis=1)
-                        df_new_aprov["Peso Label"] = df_new_aprov["Peso Calculado"].apply(normalize_peso)
-                        
-                        cols_final = ["Solicitação", "Região", "Peso Label", "Data Referência", "Tipo Evento"]
-                        # Garantir que colunas existem
-                        for c in cols_final:
-                            if c not in df_new_aprov.columns:
-                                df_new_aprov[c] = None
-                                
-                        all_data.append(df_new_aprov[cols_final])
-                    
-        except Exception as e:
-            # st.warning(f"Erro ao carregar {os.path.basename(file_path)}: {e}")
-            pass
+    # Garantir tipo string para Solicitação
+    if "Solicitação" in df_all.columns:
+        df_all["Solicitação"] = df_all["Solicitação"].astype(str)
+    
+    # Ordenar dataframe completo por data para garantir cronologia
+    if "Data Referência" in df_all.columns:
+        df_all = df_all.sort_values("Data Referência")
+        
+    all_data = []
+
+    # --- 1. Processar Cadastradas (Primeira aparição no sistema) ---
+    # drop_duplicates com keep='first' mantém a primeira ocorrência cronológica
+    df_cad = df_all.drop_duplicates("Solicitação", keep="first").copy()
+    
+    if not df_cad.empty:
+        df_cad["Tipo Evento"] = "Cadastro"
+        # Aplicar regra de peso
+        df_cad["Peso Calculado"] = df_cad.apply(calcular_peso_ajustado, axis=1)
+        df_cad["Peso Label"] = df_cad["Peso Calculado"].apply(normalize_peso)
+        
+        cols_final = ["Solicitação", "Região", "Peso Label", "Data Referência", "Tipo Evento"]
+        # Garantir colunas
+        for c in cols_final:
+            if c not in df_cad.columns:
+                df_cad[c] = None
+        all_data.append(df_cad[cols_final])
+
+    # --- 2. Processar Aprovadas (Primeira vez como APROVADA) ---
+    if "Status Solicitação" in df_all.columns:
+        df_aprov_raw = df_all[df_all["Status Solicitação"] == "APROVADA"].copy()
+        
+        if not df_aprov_raw.empty:
+            # Ordenar novamente para garantir (embora já deva estar)
+            df_aprov_raw = df_aprov_raw.sort_values("Data Referência")
+            # Manter a primeira vez que apareceu como APROVADA
+            df_aprov = df_aprov_raw.drop_duplicates("Solicitação", keep="first").copy()
+            
+            df_aprov["Tipo Evento"] = "Aprovação"
+            # Aplicar regra de peso
+            df_aprov["Peso Calculado"] = df_aprov.apply(calcular_peso_ajustado, axis=1)
+            df_aprov["Peso Label"] = df_aprov["Peso Calculado"].apply(normalize_peso)
+            
+            cols_final = ["Solicitação", "Região", "Peso Label", "Data Referência", "Tipo Evento"]
+            # Garantir colunas
+            for c in cols_final:
+                if c not in df_aprov.columns:
+                    df_aprov[c] = None
+            all_data.append(df_aprov[cols_final])
             
     if not all_data:
         return pd.DataFrame()
