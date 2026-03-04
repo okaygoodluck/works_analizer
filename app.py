@@ -1,7 +1,9 @@
 import streamlit as st
+from ui_components import apply_modern_style
 
 # Configuração da Página Principal (Ponto de Entrada)
 st.set_page_config(page_title="Works Analyzer - Portal", layout="wide")
+apply_modern_style()
 
 st.title("🚀 Works Analyzer - Portal de Dashboards")
 st.markdown("Bem-vindo ao sistema centralizado de análise de solicitações. Selecione um dashboard no menu lateral.")

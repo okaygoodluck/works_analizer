@@ -4,6 +4,7 @@ import os
 import glob
 import re
 import altair as alt
+from ui_components import apply_modern_style, metric_card
 
 # Configuração da página
 st.set_page_config(
@@ -11,6 +12,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+apply_modern_style()
 
 # Caminho dos arquivos
 BASE_PATH = r"i:\IT\ODCO\PUBLICA\Kennedy\Projetos\works_analyzer\mesao"
@@ -204,7 +206,7 @@ st.divider()
 
 # KPI Totais
 total_movimentacoes = len(df_filtered)
-st.metric("Total de Movimentações (Status de Interesse)", total_movimentacoes)
+metric_card("Total de Movimentações (Status de Interesse)", total_movimentacoes)
 
 # --- Análise Unificada (Região e Peso) ---
 st.subheader("📊 Análise de Produtividade")
