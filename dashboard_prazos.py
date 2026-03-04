@@ -6,6 +6,7 @@ import re
 import numpy as np
 import altair as alt
 from datetime import datetime
+from ui_components import apply_modern_style, metric_card
 
 # Configuração da página
 st.set_page_config(
@@ -13,6 +14,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+apply_modern_style()
 
 # Caminho dos arquivos
 BASE_PATH = r"i:\IT\ODCO\PUBLICA\Kennedy\Projetos\works_analyzer\mesao"
@@ -231,10 +233,14 @@ else:
     no_prazo_day = len(df_day[df_day["Status Prazo"] == "NO PRAZO"])
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Aprovadas", total_day)
-    col2.metric("Fora do Prazo", fora_prazo_day, delta_color="inverse")
-    col3.metric("Alerta", alerta_day, delta_color="off")
-    col4.metric("No Prazo", no_prazo_day, delta_color="normal")
+    with col1:
+        metric_card("Total Aprovadas", total_day)
+    with col2:
+        metric_card("Fora do Prazo", fora_prazo_day)
+    with col3:
+        metric_card("Alerta", alerta_day)
+    with col4:
+        metric_card("No Prazo", no_prazo_day)
     
     st.divider()
     
@@ -248,8 +254,10 @@ else:
         envio_tardio = motivos.get("Envio fora do Prazo", 0)
         
         c1, c2 = st.columns(2)
-        c1.metric("Não Atendidas", nao_atendidas, help="Solicitações presentes nos 3 arquivos anteriores")
-        c2.metric("Envio Fora do Prazo", envio_tardio, help="Solicitações novas enviadas com prazo curto")
+        with c1:
+            metric_card("Não Atendidas", nao_atendidas, suffix=" (Recorrência)")
+        with c2:
+            metric_card("Envio Tardio", envio_tardio, suffix=" (Novas)")
         
         st.markdown("#### Detalhamento por Região")
 

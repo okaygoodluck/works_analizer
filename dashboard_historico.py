@@ -4,11 +4,14 @@ import os
 import glob
 import re
 import altair as alt
+from ui_components import apply_modern_style, metric_card
 
 # Configuração da página
 st.set_page_config(page_title="Histórico de Demandas APROVADAS", layout="wide")
+apply_modern_style()
 
 BASE_PATH = r"i:\IT\ODCO\PUBLICA\Kennedy\Projetos\works_analyzer\mesao"
+
 
 # --- Funções de Carga e Processamento ---
 
@@ -175,8 +178,24 @@ def render_dashboard_tab(df_tab, title_prefix):
         st.warning(f"Nenhum dado de {title_prefix} no período selecionado.")
         return
 
-    # --- Seção 1: Volume Diário ---
-    st.subheader(f"📈 Volume de {title_prefix} por Dia")
+    # --- Seção 1: Volume Diário e KPIs ---
+    
+    # KPIs Rápidos
+    total_vol = len(df_tab)
+    unique_regs = df_tab["Região"].nunique()
+    
+    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
+    with col_kpi1:
+        metric_card(f"Total de {title_prefix}", total_vol, suffix=" itens")
+    with col_kpi2:
+        metric_card("Regiões Ativas", unique_regs)
+    with col_kpi3:
+        last_date = df_tab["Data Referência"].max().strftime("%d/%m/%Y")
+        metric_card("Última Atualização", last_date)
+        
+    st.divider()
+    
+    st.subheader(f"📈 Evolução Diária ({title_prefix})")
 
     # Agrupar por data e região
     daily_vol = df_tab.groupby(["Data Referência", "Região"]).size().reset_index(name="Quantidade")
@@ -195,12 +214,15 @@ def render_dashboard_tab(df_tab, title_prefix):
     if sel_regs:
         daily_vol_filtered = daily_vol[daily_vol["Região"].isin(sel_regs)]
         
-        chart_line = alt.Chart(daily_vol_filtered).mark_line(point=True).encode(
-            x=alt.X("Data Referência:T", title="Data"),
+        # Cores mais modernas (Paleta de azuis/roxos)
+        base = alt.Chart(daily_vol_filtered).encode(
+            x=alt.X("Data Referência:T", title="Data", axis=alt.Axis(format="%d/%m", labelAngle=0)),
             y=alt.Y("Quantidade:Q", title="Volume"),
-            color=alt.Color("Região:N", title="Região"),
+            color=alt.Color("Região:N", scale=alt.Scale(scheme="category20b"), legend=alt.Legend(title="Região", orient="bottom")),
             tooltip=["Data Referência", "Região", "Quantidade"]
-        ).properties(height=400)
+        )
+
+        chart_line = base.mark_line(point=True, interpolate="monotone").properties(height=350)
         
         st.altair_chart(chart_line, use_container_width=True)
     else:
@@ -245,14 +267,14 @@ def render_dashboard_tab(df_tab, title_prefix):
         if sel_regs_w:
             weight_dist_filt = weight_dist[weight_dist["Região"].isin(sel_regs_w)]
             
-            # Gráfico de Colunas Agrupadas
-            chart_weight = alt.Chart(weight_dist_filt).mark_bar().encode(
-                x=alt.X("Peso Label:N", title="Peso"),
-                y=alt.Y("Quantidade:Q", title="Quantidade"),
-                color=alt.Color("Peso Label:N", legend=None),
-                column=alt.Column("Região:N", header=alt.Header(titleOrient="bottom", labelOrient="bottom")),
+            # Gráfico de Colunas Agrupadas Moderno
+            chart_weight = alt.Chart(weight_dist_filt).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                x=alt.X("Peso Label:N", title="Peso", axis=alt.Axis(labelAngle=0)),
+                y=alt.Y("Quantidade:Q", title="Volume"),
+                color=alt.Color("Peso Label:N", legend=None, scale=alt.Scale(scheme="viridis")),
+                column=alt.Column("Região:N", header=alt.Header(titleOrient="bottom", labelOrient="bottom", titleFontSize=14, labelFontSize=12)),
                 tooltip=["Região", "Peso Label", "Quantidade"]
-            ).properties(width=100, height=300)
+            ).properties(width=120, height=250)
             
             st.altair_chart(chart_weight)
         else:

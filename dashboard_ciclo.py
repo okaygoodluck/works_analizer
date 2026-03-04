@@ -4,8 +4,8 @@ import os
 import glob
 import re
 import altair as alt
-
 import numpy as np
+from ui_components import apply_modern_style, metric_card
 
 # Configuração da página
 st.set_page_config(
@@ -13,6 +13,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+apply_modern_style()
 
 # Caminho dos arquivos
 BASE_PATH = r"i:\IT\ODCO\PUBLICA\Kennedy\Projetos\works_analyzer\mesao"
@@ -267,10 +268,14 @@ else:
     in_progress = df_cycles[df_cycles["APROVADA"].notna() & df_cycles["ENVIADA PARA O CONDIS"].isna()]
     total_in_progress = len(in_progress)
 
-    col1.metric("Tempo Médio Total", f"{avg_cycle:.1f} dias")
-    col2.metric("Mediana do Ciclo", f"{median_cycle:.0f} dias")
-    col3.metric("Ciclos Concluídos", total_completed)
-    col4.metric("Em Andamento", total_in_progress)
+    with col1:
+        metric_card("Tempo Médio Total", f"{avg_cycle:.1f}", suffix=" dias")
+    with col2:
+        metric_card("Mediana do Ciclo", f"{median_cycle:.0f}", suffix=" dias")
+    with col3:
+        metric_card("Ciclos Concluídos", total_completed)
+    with col4:
+        metric_card("Em Andamento", total_in_progress)
     
     st.divider()
     
